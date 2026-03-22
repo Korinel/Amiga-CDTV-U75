@@ -18,7 +18,7 @@ This project would not exist without the work of CDTV Land, who, in June 2022, d
 
 The motivation stated in that post—enabling community replacements and keeping CDTV systems alive—is exactly what this project is intended to support.
 
-Is CDTV Land's ROM final? I do not think so, but I believe it is close. While dynamic analysis proved that each peripheral worked flawlessly with that ROM, the final bytes in the firmware suggest otherwise. They appear to be keyboard scan codes, and they do not match a CD1221. But see below…
+Is CDTV Land's ROM final? I do not think so, but I believe it is close. While dynamic analysis proved that each peripheral worked flawlessly with that ROM, the scan codes at the end of the firmware do not match the CD 1221 and are older. But see below…
 
 ---
 
@@ -28,7 +28,7 @@ Is CDTV Land's ROM final? I do not think so, but I believe it is close. While dy
 |---|---|
 | `U75-6500.asm` | Fully annotated 6500 syntax assembly (syntax)
 | `U75-Ghidra.txt` | Ghidra export — raw annotated listing exported from the disassembler. Useful as a cross-reference. |
-| `U75-ROM-dump.csv` | CDTV Land's ROM as a CSV for radability (512 rows × 9 columns: address + 8 data bytes). Useful for byte-level verification. |
+| `U75-ROM-dump.csv` | CDTV Land's ROM as a CSV for readability (512 rows × 9 columns: address + 8 data bytes). Useful for byte-level verification. |
 
 ---
 
@@ -36,11 +36,11 @@ Is CDTV Land's ROM final? I do not think so, but I believe it is close. While dy
 
 The 6500/1 ROM from CDTV Land (U75-ROM-dump.csv) was imported into NSA's Ghidra for manual static analysis, using input from the CDTV schematics, the 6500/1 datasheet, and documented IR protocols.
 
-As the static analysis neared completion, the ROM was then loaded into a modified 6502 emulator, and a test harness was built to simulate signal input. This dynamic analysis was used to validate assumptions from the static work. This harness was a fully automated Claude-assisted code project.
+As the static analysis neared completion, the ROM was then loaded into a modified 6502 emulator, and a test harness was built to simulate signal input. This dynamic analysis was used to validate assumptions from the static work. This harness was a fully automated Anthropic Claude-assisted code project.
 
 The harness exercised all ~1000 lines of assembly; only around five bytes of dead code were identified. Comments were refined throughout. Each peripheral was also reverse-engineered, allowing comparison between transmitter and receiver implementations.
 
-Finally, Anthropic Claude was used to review the entire codebase in detail and correct any remaining issues. The reverse engineering should therefore be highly accurate!
+Finally, Claude was used to review the entire codebase in detail and correct any remaining issues. The reverse engineering should therefore be highly accurate!
 
 ---
 
@@ -48,7 +48,7 @@ Finally, Anthropic Claude was used to review the entire codebase in detail and c
 
 Not a huge amount—most of the protocols had already been documented over the years by analysing signals emitted by the peripherals. However, the dual joystick protocol had not been formally documented and is now covered under the Brick project.
 
-But!!!! Was there a peripheral that existed that never made it to production? Absolutely! The CDTV Infra-Red wireless keyboard, or "Keyboard IR (infrared) interface", as seen in a magazine (in optional accessories).
+But!!!! Was there a peripheral that existed that never made it to production? Absolutely! The "CDTV Infra-Red wireless keyboard" along with the "Keyboard IR (infrared) interface", as seen in articles of the time.
 
 ![alt text](Optional.png)
 
@@ -56,7 +56,9 @@ But!!!! Was there a peripheral that existed that never made it to production? Ab
 
 The CDTV Land firmware keyboard scan codes match the keyboard (a US Amiga 1000 keyboard) shown above. Does that firmware contain the code required to support that keyboard wirelessly? It does!
 If we extract that code and derive the protocol, can we enable wireless keyboard functionality on a real CDTV?
-We can indeed :) Full working code will be uploaded shortly....
+We can indeed :) 
+
+Full working code will be uploaded shortly....
 
 ---
 
