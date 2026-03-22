@@ -1,8 +1,6 @@
 # Amiga-CDTV-U75
 
-![alt text](Amiga1000-kb.png)
-
-
+![alt text](U75.png)
 ## What is the U75?
 
 The U75 ROM chip is unique to the Commodore Amiga CDTV. It handles communication for the two rear ports ("REMOTE" and "K/B"), as well as the front Infra-Red (IR) sensor and the buttons on the CD1000 unit itself.
@@ -42,7 +40,7 @@ As the static analysis neared completion, the ROM was then loaded into a modifie
 
 The harness exercised all ~1000 lines of assembly; only around five bytes of dead code were identified. Comments were refined throughout. Each peripheral was also reverse-engineered, allowing comparison between transmitter and receiver implementations.
 
-Finally, Anthropic Claude was used to review the entire codebase in detail and correct any remaining issues. The reverse engineering should therefore be highly accurate.
+Finally, Anthropic Claude was used to review the entire codebase in detail and correct any remaining issues. The reverse engineering should therefore be highly accurate!
 
 ---
 
