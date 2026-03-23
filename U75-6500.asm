@@ -43,7 +43,7 @@ zp_PortC                = $0003                             ; $0003: FF  ; Shado
 zp_PulseDuration_LSB    = $0004                             ; $0004: FF  ; IR pulse duration counter LSB. Incremented every IRQ tick (~163 t-states) while bit 7 of zp_IREventFlag is set
 zp_PulseDuration_MSB    = $0005                             ; $0005: FF  ; IR pulse duration counter MSB. Masked to 4 bits at 0x0BB6 giving a 12-bit range (0-4095 ticks, max ~445 ms)
 zp_ProtocolMask         = $0006                             ; $0006: FF  ; Protocol line mask: 0x01 for IR (PA0/IRDT), 0x08 for wired (PA3/PRDT), 0x06 for keyboard (PA1+PA2). Set at 0x08C8
-zp_IRCommandByte        = $0007                             ; $0007: FF  ; Decoded IR command byte (mouse/joy/kbd). See per-function docs
+zp_IRCommandByte        = $0007                             ; $0007: FF  ; Decoded IR command byte. On the 20-bit path: mouse/joystick/numpad command. On the 40-bit keyboard path: qualifier bitmask (one bit per qualifier key). Interpretation depends on which decode path last wrote this location.
 zp_KeyboardIndex        = $0008                             ; $0008: FF  ; Keyboard table index (0x0F7C). 0=no key. Set by f_Decode40BitIRKeyboard
 zp_IRShift0             = $0009                             ; $0009: FF  ; IR shift register byte 0 (LSB of 40-bit frame buffer). Bits enter via ROR chain from byte 4
 zp_IRShift1             = $000A                             ; $000A: FF  ; IR shift register byte 1
@@ -56,7 +56,7 @@ zp_IRQCount_LSB         = $0010                             ; $0010: FF  ; 16-bi
 zp_IRQCount_MSB         = $0011                             ; $0011: FF  ; 16-bit IRQ tick counter MSB. Combined with LSB bit0 gives a 9-bit window (~512 IRQs / ~56 ms) for periodic port refresh
 zp_KB_Temp              = $0012                             ; $0012: FF  ; Keyboard state flag. bit0: set when a full NEC frame has been validated (enables repeat-range test on next frame)
 zp_Remote_NP_Media      = $0013                             ; $0013: FF  ; Remote event type flags. bit0=numpad key pending, bit1=media key pending (bit1 is never set by any firmware path)
-zp_ModifierIndexPrior   = $0014                             ; $0014: FF  ; Previous modifier bitmask. Compared with zp_IRCommandByte; updated after TX
+zp_ModifierIndexPrior   = $0014                             ; $0014: FF  ; Previous qualifier bitmask (one bit per qualifier key per Amiga Hardware Reference Manual). Stored here after each IR frame; compared on next frame to detect changes. RENAME CANDIDATE: zp_QualifierBitmaskPrior
 zp_KeyboardIndexPrior   = $0015                             ; $0015: FF  ; Previous keyboard index. Compared against zp_KeyboardIndex to detect changes; updated after transmission
 zp_IRInputReady         = $0016                             ; $0016: FF  ; IR data ready flag. bit7=peripheral data ready for main loop commit. Set by f_CommitPendingModifierEntry, cleared at 0x0861
 zp_IRPR_RawState        = $0017                             ; $0017: FF  ; Raw PortA state snapshot. Updated each call to f_DetectInputEdges; previous value used for edge XOR comparison
@@ -97,8 +97,8 @@ zp_StackBase            = $003F                             ; $003F: FF  ; Initi
 ; Defined as equates — not assembled storage.
 ; ────────────────────────────────────────────────────────────────────────────
 
-hw_PortA                = $0080                             ; $0080: FF  ; Hardware PortA register. PA0=IRDT (IR data), PA1=_KBDATA, PA2=_KBCLOCK, PA3=PRDT (wired peripheral data). Active-low inputs
-hw_PortB                = $0081                             ; $0081: FF  ; Hardware PortB register. PB0-1=AUS0-1 (address), PB2=_KBSE (serial enable from CIA), PB3=AUS2, PB4-7=CPCP0-3 (to U62)
+hw_PortA                = $0080                             ; $0080: FF  ; Hardware PortA. PA1=_KBDATA output (U75 drives to CIA), PA2=_KBCLOCK output (U75 drives to CIA). U75 uses these as outputs only to relay IR-decoded scancodes. The CD1221 also connects to these lines but communicates with the CIA independently.
+hw_PortB                = $0081                             ; $0081: FF  ; Hardware PortB. PB2=_KBSE: keyboard serial enable line. Held high by CIA when ready to receive; U75 waits for PB2 high before each serial transmission. Note: _KBSE is floating/unconnected on the CD1221 — the line is driven by the CIA not the keyboard.
 hw_PortC                = $0082                             ; $0082: FF  ; Hardware PortC register. Directly drives Denise JOY1DAT for joystick quadrature lines. Active-low
 hw_PortD                = $0083                             ; $0083: FF  ; Hardware PortD register. Directly drives Denise JOY0DAT for mouse quadrature lines. Active-low
 hw_UpperLatchWO         = $0084                             ; $0084: FF  ; Only ever written 0
@@ -1258,30 +1258,13 @@ ReturnFromFunction:
 
 ; ────────────────────────────────────────────────────────────────────────────
 ; f_Decode40BitIRKeyboard (0x0CA8)
-; Purpose: Decode a 40-bit IR keyboard frame from the five shift-register bytes
-; (zp_IRShift0..4) and store the modifier bitmask and keyboard index.
-; Gated: only reached when IREventFlag bit 2 is set (qualifier header nibble = 0x2).
-; Frame encoding — shift register layout after f_AcquireIRBits:
-; IRShift0 = raw S0  where S0 = ((M_dec & 0xF) << 4) | 0x02
-; IRShift1 = raw S1  where S1 = ((K_dec & 0xF) << 4) | (M_dec >> 4)
-; IRShift2 = raw S2  where S2 = 0xD0 | (K_dec >> 4)
-; IRShift3 = raw S3  (solved per-frame to satisfy checksums 1 and 2)
-; IRShift4 = raw S4  where S4[7:4] = ~(K_dec>>4) & 0xF (checksum 3 constraint)
-; Decoded outputs via 4-bit right-rotation of [S2:S1:S0] (RotateLoopD):
-; M_dec (modifier)  = (S1[3:0] << 4) | (S0 >> 4)
-; K_dec (key index) = (S2[3:0] << 4) | (S1 >> 4)
-; S0[3:0] = 0x2 always (keyboard header nibble verified before entry)
-; Three integrity checksums verified before RotateLoopD (raw register values):
-; 1: S0 XOR ScratchD_post XOR 0xFF = 0   (S0 vs complement via S2/S3/S4 rotation)
-; 2: S1 XOR PeriphSave_post XOR 0xFF = 0 (S1 vs complement via S3/S4 rotation)
-; 3: S2[3:0] XOR IRScratch_post XOR 0x0F = 0  (IRShift4[7:4] after 4 LSRs)
-; Modifier bitmask (bit positions in decoded M_dec):
-; bit 0=R.Shift  bit 1=L.Shift  bit 2=R.Alt  bit 3=L.Alt
-; bit 4=R.Amiga  bit 5=L.Amiga  bit 6=Control  bit 7=Caps Lock
-; Reboot: bits 4+5+6 all set (R.Amiga + L.Amiga + Ctrl).
-; Inputs:  zp_IRShift0..4 (raw received bytes)
-; Outputs: zp_IRCommandByte (modifier bitmask) | zp_KeyboardIndex (key table index)
-; Aborts:  any checksum failure sets IREventFlag bit 0 and returns early
+; Decodes a 40-bit IR keyboard frame from shift registers IRShift0..4.
+; Outputs:
+; zp_IRCommandByte  = qualifier bitmask (8 qualifier keys, one-hot per Amiga spec)
+; zp_KeyboardIndex  = IR keycode index (0 = no key pressed)
+; Note: zp_IRCommandByte is referred to as qualifier bitmask on this path.
+; The term modifier in earlier annotations is incorrect — the Amiga Hardware
+; Reference Manual calls these keys qualifiers.
 ; ────────────────────────────────────────────────────────────────────────────
 f_Decode40BitIRKeyboard:
                         LDA             zp_IRShift0         ; $0CA8: A5 09  ; Load IRShift0: modifier bitmask byte
@@ -1926,23 +1909,11 @@ tbl_NumPadScancodes:
 
 ; ────────────────────────────────────────────────────────────────────────────
 ; f_ProcessKeyboardEvent (0x0F0E)
-; Purpose: Compare current modifier/key state against the prior frame.
-; If changed transmit exactly one scancode per call.
-; If nothing changed refresh prior values and return without transmitting.
-; Call order priority (modifier changes take precedence over key changes):
-; 1. Modifier changed AND non-zero -> SendModifierValue:
-; find lowest set bit | look up scancode in tbl_ModifierKeys[Y] | transmit press
-; 2. Modifier changed AND zero     -> Modifier_Default:
-; release all prior modifiers
-; 3. Modifier unchanged | key changed -> ProcessKeyboardScancode:
-; transmit press or release
-; 4. Neither changed -> commit current values as new prior and return
-; Because only one event is handled per call a modifier+key frame requires two
-; dispatcher passes: first call sends the modifier event | second sends the key event.
-; Inputs:  zp_IRCommandByte (modifier bitmask) | zp_KeyboardIndex (key table index)
-; zp_ModifierIndexPrior (0x14) | zp_KeyboardIndexPrior (0x15)
-; Outputs: scancode byte transmitted via f_SendKeyboardSerial (via JMP not JSR)
-; Side effects: updates zp_ModifierIndexPrior and/or zp_KeyboardIndexPrior
+; Compares current qualifier bitmask and keycode index against prior frame values.
+; Transmits exactly one scancode per call if either has changed.
+; Priority: qualifier change is handled before keycode change.
+; Note: modifier in variable names (zp_ModifierIndexPrior etc.) reflects an
+; earlier annotation error — the Amiga canonical term is qualifier key.
 ; ────────────────────────────────────────────────────────────────────────────
 f_ProcessKeyboardEvent:
                         LDA             zp_IRCommandByte    ; $0F0E: A5 07  ; Load current modifier bitmask
@@ -1999,6 +1970,16 @@ Modifier_Default:
                         STX             zp_ModifierIndexPrior; $0F4E: 86 14  ; Clear ModifierIndexPrior
                         BEQ             IterateModifiers    ; $0F50: F0 DD  ; Branch always (A=0 after STX cleared the prior) — iterate over bits to release each
 
+; ────────────────────────────────────────────────────────────────────────────
+; tbl_QualifierKeys (0x0F52) — RENAME CANDIDATE from tbl_ModifierKeys
+; Pre-shifted Amiga scancodes for the eight qualifier keys.
+; ASL at 0x0F3E produces the final wire byte.
+; Order matches IR bitmask LSB-first scan:
+; Y=0:R.Shift(0x61) Y=1:R.Alt(0x65) Y=2:R.Amiga(0x67) Y=3:Ctrl(0x63)
+; Y=4:L.Shift(0x60) Y=5:L.Alt(0x64) Y=6:L.Amiga(0x66) Y=7:CapsLock(0x62)
+; Reboot combo: bits 4+5+6 (R.Amiga + L.Amiga + Ctrl = 0x70).
+; ────────────────────────────────────────────────────────────────────────────
+
 ; Modifier key table (8 entries).
 ; Pre-shift raw scancodes;
 ; ASL at 0x0F3E creates wire byte.
@@ -2015,14 +1996,16 @@ tbl_ModifierKeys:
                         .byte           $62                 ; $0F59: 62  ; Y=7: Caps Lock — wire press=0xC4, release=0xC5 (IR bit7; single-key frame 1152)
 
 ; ────────────────────────────────────────────────────────────────────────────
-; Converts wired keyboard (CD1221) raw indices to Amiga keyboard scancodes and
-; transmits via the keyboard serial interface. Handles both key press and key
-; release events by tracking previous key state.
+; f_ProcessKeyboardScancode (0x0F5A)
+; Converts a decoded IR keyboard keycode index to an Amiga scancode and
+; transmits it to the CIA over PA1 (_KBDATA) / PA2 (_KBCLOCK).
+; Source: IR 40-bit frame decode via f_Decode40BitIRKeyboard.
+; Not used for the wired CD1221 keyboard — that device talks directly to the CIA.
 ; ────────────────────────────────────────────────────────────────────────────
 
 ; Key index changed. Non-zero: transmit press for new key. Zero: transmit release for prior key.
 ProcessKeyboardScancode:
-                        LDA             zp_KeyboardIndex    ; $0F5A: A5 08  ; Load keyboard table index
+                        LDA             zp_KeyboardIndex    ; $0F5A: A5 08  ; Loads IR keyboard table index (zp_KeyboardIndex). Non-zero = key pressed via IR; zero = release prior key
                         BEQ             HandleKeyRelease    ; $0F5C: F0 12  ; Index = 0x00: no key pressed this frame — send release for prior key
 
 ; Key press path - new key detected
@@ -2033,7 +2016,7 @@ ProcessKeyboardScancode:
 
 ; Lookup scancode and transmit
 TransmitScancode:
-                        LDA             $107B,Y             ; $0F65: B9 7C 0F  ; Look up Amiga scancode for this key index — tbl_KeyboardScancodes[Y] = raw Amiga scancode
+                        LDA             $107B,Y             ; $0F65: B9 7C 0F  ; Look up Amiga scancode from tbl_KeyboardScancodes[Y] — IR keyboard keycode index to Amiga scancode
                         ASL             A                   ; $0F68: 0A  ; Multiply scancode by 2 — bit 0 will hold press(0) or release(1) flag
                         ORA             zp_ScratchB         ; $0F69: 05 27  ; Merge press/release flag into bit 0 — result is the final wire byte
                         STA             zp_ScratchA         ; $0F6B: 85 26  ; Store final scancode in zp_ScratchA
@@ -2050,19 +2033,18 @@ HandleKeyRelease:
 
 ; ────────────────────────────────────────────────────────────────────────────
 ; tbl_KeyboardScancodes (0x0F7C)
-; Amiga keyboard scancode table. Indexed by zp_KeyboardIndex (0-127).
-; Maps CD1221 wired keyboard positions to Amiga raw scancodes.
-; NOTE: This appears to be a US Amiga 1000 keymap, not the full CD1221.
-; Missing: KP ( ) / * +, European keys 0x30 and 0x2B.
-; Space (0x40) is hardcoded at 0x0E3F rather than appearing in the table.
-; 0x3B is present but its purpose is unknown.
+; Maps IR keyboard keycode indices (0-127) to Amiga scancodes.
+; Used exclusively by the IR keyboard path — not the wired CD1221.
+; The CD1221 communicates directly with the CIA and does not use this table.
+; NOTE: US Amiga keymap. Missing: KP ( ) / * +, European keys 0x30 and 0x2B.
+; Space (0x40) is hardcoded at 0x0E3F rather than appearing here.
 ; ────────────────────────────────────────────────────────────────────────────
 
 ; Amiga keyboard scancode table. Indexed by KeyboardIndex (0-127).
 ; Maps CD1221 positions to Amiga raw scancodes. NOTE: appears to be US Amiga 1000 keymap.
 ; Missing: KP ()/*/+, European keys 0x30/0x2B, Space (hardcoded at 0x0E3F).
 tbl_KeyboardScancodes:
-                        .byte           $00                 ; $0F7C: 00
+                        .byte           $00                 ; $0F7C: 00  ; IR keyboard keycode table — indexed by zp_KeyboardIndex from 40-bit IR frame decode
                         .byte           $00                 ; $0F7D: 00  ; Key: `/~ (0x00)
                         .byte           $01                 ; $0F7E: 01  ; Key: 1/! (0x01)
                         .byte           $02                 ; $0F7F: 02  ; Key: 2/@ (0x02)

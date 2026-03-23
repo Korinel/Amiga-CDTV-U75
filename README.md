@@ -5,7 +5,7 @@
 
 The U75 ROM chip is unique to the Commodore Amiga CDTV. It handles communication for the two rear ports ("REMOTE" and "K/B"), as well as the front Infra-Red (IR) sensor and the buttons on the CD1000 unit itself.
 
-This firmware acts as the receiver for the two IR remote controllers (252594-1 and 252594-2), the front panel of the CD1000 base unit, the CD1200 trackball (IR & wired), the CD1221 keyboard (wired), the CD1252 mouse (IR), and the CD1253 mouse (wired).
+This firmware acts as the receiver for the two IR remote controllers (252594-1 and 252594-2), the front panel of the CD1000 base unit, the CD1200 trackball (IR & wired), the CD1252 mouse (IR), and the CD1253 mouse (wired).
 
 For the most part, the IR (front IR sensor IRDT) and the "REMOTE" (rear peripheral port PRDT) protocols are the same. The mouse, joystick, remote controller, and keyboard each have their own protocols, which will be documented with demonstrators shortly.
 
